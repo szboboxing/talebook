@@ -92,6 +92,21 @@ def is_admin(func):
 class BaseHandler(web.RequestHandler):
     _path_to_env = {}
 
+    def _request_summary(self) -> str:
+        userid = 0
+        username = "-"
+        if self.current_user:
+            userid = self.current_user.id
+            username = self.current_user.username
+
+        return '%s %s (%s) "%d %s"' % (
+            self.request.method,
+            self.request.uri,
+            self.request.remote_ip,
+            userid,
+            username,
+        )
+
     def get_secure_cookie(self, key):
         if not self.cookies_cache.get(key, ""):
             self.cookies_cache[key] = super(BaseHandler, self).get_secure_cookie(key)
@@ -207,14 +222,13 @@ class BaseHandler(web.RequestHandler):
         if not login_time or int(login_time) < int(time.time()) - 7 * 86400:
             return None
         uid = self.get_secure_cookie("user_id")
-        return int(uid) if uid.isdigit() else None
+        return int(uid) if uid and uid.isdigit() else None
 
     def get_current_user(self):
         user_id = self.user_id()
         if user_id:
             user_id = int(user_id)
         user = self.session.get(Reader, user_id) if user_id else None
-        logging.debug("Query User(%s) = %s" % (user_id, user))
 
         admin_id = self.get_secure_cookie("admin_id")
         if admin_id:

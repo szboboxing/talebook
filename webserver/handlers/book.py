@@ -121,7 +121,7 @@ class BookRefer(BaseHandler):
             try:
                 return api.get_book(title)
             except:
-                return {"err": "httprequest.baidubaike.failed", "msg": _(u"百度百科查询失败")}
+                raise RuntimeError({"err": "httprequest.baidubaike.failed", "msg": _(u"百度百科查询失败")})
 
         if provider_key == douban.KEY:
             mi.douban_id = provider_value
@@ -134,8 +134,8 @@ class BookRefer(BaseHandler):
             try:
                 return api.get_book(mi)
             except:
-                return {"err": "httprequest.douban.failed", "msg": _(u"豆瓣接口查询失败")}
-        return {"err": "params.provider_key.not_support", "msg": _(u"不支持该provider_key")}
+                raise RuntimeError({"err": "httprequest.douban.failed", "msg": _(u"豆瓣接口查询失败")})
+        raise RuntimeError({"err": "params.provider_key.not_support", "msg": _(u"不支持该provider_key")})
 
     @js
     @auth
@@ -186,7 +186,14 @@ class BookRefer(BaseHandler):
         if not self.is_admin() and not self.is_book_owner(book_id, self.user_id()):
             return {"err": "user.no_permission", "msg": _(u"无权限")}
 
-        refer_mi = self.plugin_get_book_meta(provider_key, provider_value, mi)
+        try:
+            refer_mi = self.plugin_get_book_meta(provider_key, provider_value, mi)
+        except RuntimeError as e:
+            return e.args[0]
+
+        if not refer_mi:
+            return {"err": "plugin.fail", "msg": _(u"插件拉取信息异常，请重试")}
+
         if only_cover == "yes":
             # just set cover
             mi.cover_data = refer_mi.cover_data
@@ -433,9 +440,11 @@ class BookUpload(BaseHandler):
             mi.title = utils.super_strip(mi.title)
             mi.authors = [utils.super_strip(mi.author_sort)]
 
-        if fmt.lower() == "txt":
-            mi.title = name.replace(".txt", "")
+        # 非结构化的格式，calibre无法识别准确的信息，直接从文件名提取
+        if fmt in ["txt", "pdf"]:
+            mi.title = name.replace("." + fmt, "")
             mi.authors = [_(u"佚名")]
+
         logging.info("upload mi.title = " + repr(mi.title))
         books = self.db.books_with_same_title(mi)
         if books:
@@ -504,7 +513,7 @@ class BookRead(BaseHandler):
 
             # epub_dir is for javascript
             epub_dir = "/get/extract/%s" % book["id"]
-            return self.html_page("book/read.html", {
+            return self.html_page("book/" + CONF["EPUB_VIEWER"], {
                 "book": book,
                 "epub_dir": epub_dir,
                 "is_ready": (fmt == 'epub'),
@@ -532,6 +541,8 @@ class TxtRead(BaseHandler):
             else:
                 # 读取从起始位置到结束位置的内容
                 content = file.read(end - start)
+        if not content:
+            return {"err": "format error", "msg": "空文件"}
         encode = get_content_encoding(content)
         content = content.decode(encoding=encode, errors='ignore').replace("\r", "").replace("\n", "<br>")
         return {"err": "ok", "content": content}
