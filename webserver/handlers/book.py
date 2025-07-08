@@ -19,7 +19,7 @@ from webserver.services.extract import ExtractService
 from webserver.services.mail import MailService
 from webserver.handlers.base import BaseHandler, ListHandler, auth, js
 from webserver.models import Item
-from webserver.plugins.meta import baike, douban
+from webserver.plugins.meta import baike, douban, youshu
 from webserver.plugins.parser.txt import get_content_encoding
 
 CONF = loader.get_settings()
@@ -112,6 +112,15 @@ class BookRefer(BaseHandler):
             return {"err": "httprequest.baidubaike.failed", "msg": _(u"百度百科查询失败")}
         if book:
             books.append(book)
+
+        api = youshu.YoushuApi(copy_image=True)
+        try:
+            book = api.get_book(title)
+        except:
+            return {"err": "httprequest.youshu.failed", "msg": _(u"优书网查询失败")}
+        if book:
+            books.append(book)
+
         return books
 
     def plugin_get_book_meta(self, provider_key, provider_value, mi):
@@ -135,6 +144,14 @@ class BookRefer(BaseHandler):
                 return api.get_book(mi)
             except:
                 raise RuntimeError({"err": "httprequest.douban.failed", "msg": _(u"豆瓣接口查询失败")})
+
+        if provider_key == youshu.KEY:
+            title = re.sub(u"[(（].*", "", mi.title)
+            api = youshu.YoushuApi(copy_image=True)
+            try:
+                return api.get_book(title)
+            except:
+                raise RuntimeError({"err": "httprequest.youshu.failed", "msg": _(u"优书网查询失败")})
         raise RuntimeError({"err": "params.provider_key.not_support", "msg": _(u"不支持该provider_key")})
 
     @js
@@ -448,22 +465,28 @@ class BookUpload(BaseHandler):
         logging.info("upload mi.title = " + repr(mi.title))
         books = self.db.books_with_same_title(mi)
         if books:
-            book_id = books.pop()
-            return {
-                "err": "samebook",
-                "msg": _(u"已存在同名书籍《%s》") % mi.title,
-                "book_id": book_id,
-            }
-
-        fpaths = [fpath]
-        book_id = self.db.import_book(mi, fpaths)
-        self.user_history("upload_history", {"id": book_id, "title": mi.title})
+            book_id = None
+            for b in self.db.get_data_as_dict(ids=books):
+                if book_id is None:
+                    book_id = b.get("id")
+                if fmt.upper() in b.get("available_formats", ""):
+                    return {
+                        "err": "samebook",
+                        "msg": _(u"同名书籍《%s》已存在这一图书格式 %s") % (mi.title, fmt),
+                        "book_id": b.get("id")
+                    }
+            logging.info(
+                "import [%s] from %s with format %s", repr(mi.title), fpath, fmt)
+            self.db.add_format(book_id, fmt.upper(), fpath, True)
+        else:
+            fpaths = [fpath]
+            book_id = self.db.import_book(mi, fpaths)
+            self.user_history("upload_history", {"id": book_id, "title": mi.title})
+            item = Item()
+            item.book_id = book_id
+            item.collector_id = self.user_id()
+            item.save()
         self.add_msg("success", _(u"导入书籍成功！"))
-        item = Item()
-        item.book_id = book_id
-        item.collector_id = self.user_id()
-        item.save()
-
         AutoFillService().auto_fill(book_id)
         return {"err": "ok", "book_id": book_id}
 
@@ -517,6 +540,7 @@ class BookRead(BaseHandler):
                 "book": book,
                 "epub_dir": epub_dir,
                 "is_ready": (fmt == 'epub'),
+                "CANDLE_READER_SERVER": CONF["CANDLE_READER_SERVER"],
             })
         raise web.HTTPError(404, reason=_(u"抱歉，在线阅读器暂不支持该格式的书籍"))
 
